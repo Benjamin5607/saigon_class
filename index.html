@@ -344,9 +344,12 @@
         // 🔥 [비상용 데이터] 시트 로딩 실패 시 사용
         const FALLBACK_LOGIC = `S_VN,S_KR,V_VN,V_KR,Pattern,Req_Type,O_VN,O_KR,O_Type
 Tôi,나,ăn,먹다,SVO,food,Phở,쌀국수,food
-Bạn,너,uống,마시다,SVO,drink,Cà phê,커피,drink
+Bạn,너,uống,마시다,SVO,drink,Cà phê sữa,연유 커피,drink
 Anh ấy,그,đi,가다,GO,place,Sài Gòn,사이공,place
-Em bé,아기,ngủ,자다,SV,none,Nhà,집,place
+Chị ấy,그녀,đến,도착하다,GO,place,Hà Nội,하노이,place
+Em bé,아기,ngủ,자다,SV,none,,,
+Tôi,나,ở,있다,BE,place,Nhà,집,place
+Cô ấy,그녀,là,이다,BE,person,giáo viên,선생님,person
 Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
 
         const FALLBACK_STUDY = `Category,VN,Pron,KR,Tip
@@ -354,19 +357,40 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
 기본,Cảm ơn,깜 언,고맙습니다,가볍게 고개 숙여요`;
 
         // 🔥 [수식어] 데이터베이스에 없으므로 코드에 내장 (필수!)
+        const EMPTY_MODIFIER = { vn: "", kr: "", targets: [], vnPlacement: "sentenceEnd", krPlacement: "sentenceEnd" };
+        const KR_SUBJECT_FORMS = { "나": "내가", "너": "네가", "저": "제가", "우리": "우리가" };
+        const KR_OBJECT_FORMS = { "나": "나를", "너": "너를", "저": "저를", "우리": "우리를" };
         const MODIFIERS = [
-            {vn:"ngon", kr:"맛있게", target:"consume"},
-            {vn:"nhiều", kr:"많이", target:"consume"},
-            {vn:"nhanh", kr:"빨리", target:"move"},
-            {vn:"chậm", kr:"천천히", target:"move"},
-            {vn:"sớm", kr:"일찍", target:"move"},
-            {vn:"vui", kr:"즐겁게", target:"feel"},
-            {vn:"lắm", kr:"매우", target:"feel"},
-            {vn:"quá", kr:"너무", target:"feel"},
-            {vn:"nhé", kr:"~할게(요)", target:"all"},
-            {vn:"không?", kr:"~니?", target:"all"},
-            {vn:"ạ", kr:"~요(존대)", target:"all"}
+            { vn: "nhiều", kr: "많이", targets: ["consume"], vnPlacement: "afterVerb", krPlacement: "beforeVerb" },
+            { vn: "nhanh", kr: "빨리", targets: ["move"], vnPlacement: "afterVerb", krPlacement: "beforeVerb" },
+            { vn: "chậm", kr: "천천히", targets: ["move"], vnPlacement: "afterVerb", krPlacement: "beforeVerb" },
+            { vn: "sớm", kr: "일찍", targets: ["move"], vnPlacement: "afterVerb", krPlacement: "beforeVerb" },
+            { vn: "nhé", kr: "(부드러운 마무리)", targets: ["all"], vnPlacement: "sentenceEnd", krPlacement: "sentenceEnd" },
+            { vn: "không?", kr: "(의문형)", targets: ["all"], vnPlacement: "sentenceEnd", krPlacement: "sentenceEnd" },
+            { vn: "ạ", kr: "(존댓말)", targets: ["all"], vnPlacement: "sentenceEnd", krPlacement: "sentenceEnd" }
         ];
+        const PATTERN_META = {
+            SVO: {
+                label: "S + V + O",
+                description: "주어 + 동사 + 목적어",
+                tip: "타동사는 필요한 목적어 타입(food/drink/place/vehicle 등)과 함께 조합합니다."
+            },
+            GO: {
+                label: "S + GO + PLACE",
+                description: "주어 + 이동 동사 + 장소",
+                tip: "이동 동사는 목적지가 필요하며, 일부 동사는 베트남어에서 `đến` 목적지 표지를 함께 씁니다."
+            },
+            SV: {
+                label: "S + V",
+                description: "주어 + 자동사",
+                tip: "자동사는 목적어 없이도 문장이 완성되므로 불필요한 목적어를 붙이지 않습니다."
+            },
+            BE: {
+                label: "S + BE + COMP",
+                description: "주어 + 상태/정체성 동사 + 보어",
+                tip: "`ở`는 장소 보어, `là`는 사람/직업 같은 정체성 보어를 우선 사용합니다."
+            }
+        };
 
         let DB_STUDY = {}; 
         let DB_LOGIC = { subjects: [], verbs: [], objects: [] };
@@ -374,6 +398,9 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
         let dailyState = { day: 1, study: 0, lab: 0, puzzle: 0, complete: false };
 
         const getDailyGoal = (day) => ({ study: 5 + Math.floor(day/5), lab: 3 + Math.floor(day/10), puzzle: 2 + Math.floor(day/7) });
+        const pickRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
+        const normalizeText = (value) => String(value || "").trim();
+        const normalizeKey = (value) => normalizeText(value).toLowerCase();
 
         function readThemeMode() {
             const saved = localStorage.getItem(THEME_STORAGE_KEY);
@@ -410,100 +437,231 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
             applyTheme(mode);
         }
 
+        function hasFinalConsonant(word) {
+            const txt = normalizeText(word);
+            if(!txt) return false;
+            const last = txt[txt.length - 1];
+            const code = last.charCodeAt(0);
+            if(code < 0xAC00 || code > 0xD7A3) return false;
+            return ((code - 0xAC00) % 28) !== 0;
+        }
+        function subjectParticle(word) {
+            return hasFinalConsonant(word) ? "이" : "가";
+        }
+        function objectParticle(word) {
+            return hasFinalConsonant(word) ? "을" : "를";
+        }
+        function formatSubjectKr(word) {
+            const txt = normalizeText(word);
+            if(!txt) return "";
+            return KR_SUBJECT_FORMS[txt] || `${txt}${subjectParticle(txt)}`;
+        }
+        function formatObjectKr(word) {
+            const txt = normalizeText(word);
+            if(!txt) return "";
+            return KR_OBJECT_FORMS[txt] || `${txt}${objectParticle(txt)}`;
+        }
+        function uniquePush(list, item, fields) {
+            const key = fields.map(field => normalizeKey(item[field])).join("::");
+            if(!key.replace(/:/g, "")) return;
+            if(!list.some(entry => fields.map(field => normalizeKey(entry[field])).join("::") === key)) {
+                list.push(item);
+            }
+        }
+        function inferVerbFamily(verb) {
+            const reqObj = normalizeKey(verb.reqObj);
+            if(verb.pattern === "GO") return "move";
+            if(verb.pattern === "SVO" && (reqObj === "food" || reqObj === "drink")) return "consume";
+            if(verb.pattern === "BE") return "state";
+            return "all";
+        }
+        function inferGoMarker(verbVn) {
+            const vn = normalizeKey(verbVn);
+            if(["đi", "chạy", "bay", "dạo"].includes(vn)) return "đến";
+            return "";
+        }
+        function inferComplementType(verbVn, reqObj) {
+            const normalizedReq = normalizeKey(reqObj);
+            if(normalizedReq && normalizedReq !== "none") return normalizedReq;
+            return normalizeKey(verbVn) === "là" ? "person" : "place";
+        }
+        function normalizePattern(pattern, verbVn) {
+            const raw = normalizeText(pattern).toUpperCase();
+            if(raw) return raw;
+            return normalizeKey(verbVn) === "ở" || normalizeKey(verbVn) === "là" ? "BE" : "SVO";
+        }
+        function createSubjectEntry(row) {
+            return { vn: normalizeText(row[0]), kr: normalizeText(row[1]), type: "person" };
+        }
+        function createVerbEntry(row) {
+            const vn = normalizeText(row[2]);
+            const pattern = normalizePattern(row[4], vn);
+            const reqObj = normalizeKey(row[5]) || (pattern === "GO" ? "place" : pattern === "SV" ? "none" : "");
+            const verb = {
+                vn,
+                kr: normalizeText(row[3]),
+                pattern,
+                reqObj,
+                destinationMarker: pattern === "GO" ? inferGoMarker(vn) : "",
+                complementType: pattern === "BE" ? inferComplementType(vn, reqObj) : ""
+            };
+            verb.family = inferVerbFamily(verb);
+            return verb;
+        }
+        function createObjectEntry(row) {
+            return {
+                vn: normalizeText(row[6]),
+                kr: normalizeText(row[7]),
+                type: normalizeKey(row[8]) || "generic"
+            };
+        }
+        function pickObjectByType(type) {
+            const normalizedType = normalizeKey(type);
+            const candidates = DB_LOGIC.objects.filter(obj => !normalizedType || normalizedType === "generic" || obj.type === normalizedType);
+            if(candidates.length > 0) return pickRandom(candidates);
+            return DB_LOGIC.objects.length > 0 ? pickRandom(DB_LOGIC.objects) : null;
+        }
+        function chooseModifier(verb) {
+            if(Math.random() <= 0.45) return EMPTY_MODIFIER;
+            const candidates = MODIFIERS.filter(mod => mod.targets.includes(verb.family) || mod.targets.includes("all"));
+            return candidates.length > 0 ? pickRandom(candidates) : EMPTY_MODIFIER;
+        }
+        function joinSentence(parts) {
+            return parts.filter(Boolean).join(" ").replace(/\s+\?/g, "?").trim();
+        }
+        function applySentenceEndModifier(parts, modifier, placementKey) {
+            if(modifier.vn && modifier[placementKey] === "sentenceEnd") parts.push(modifier[placementKey === "vnPlacement" ? "vn" : "kr"]);
+            return parts;
+        }
+        function buildSvoSentence(subject, verb, object, modifier) {
+            const verbChunk = [verb.vn];
+            if(modifier.vn && modifier.vnPlacement === "afterVerb") verbChunk.push(modifier.vn);
+            const vnParts = [subject.vn, verbChunk.join(" "), object ? object.vn : ""];
+            applySentenceEndModifier(vnParts, modifier, "vnPlacement");
+
+            const krParts = [formatSubjectKr(subject.kr)];
+            if(object && object.kr) krParts.push(formatObjectKr(object.kr));
+            if(modifier.kr && modifier.krPlacement === "beforeVerb") krParts.push(modifier.kr);
+            krParts.push(verb.kr);
+            applySentenceEndModifier(krParts, modifier, "krPlacement");
+
+            return {
+                vnParts,
+                krParts,
+                slots: [subject.vn, verbChunk.join(" "), object ? object.vn : "", modifier.vnPlacement === "sentenceEnd" ? modifier.vn : ""]
+            };
+        }
+        function buildGoSentence(subject, verb, object, modifier) {
+            const verbChunk = [verb.vn];
+            if(modifier.vn && modifier.vnPlacement === "afterVerb") verbChunk.push(modifier.vn);
+            if(verb.destinationMarker) verbChunk.push(verb.destinationMarker);
+            const vnParts = [subject.vn, verbChunk.join(" "), object ? object.vn : ""];
+            applySentenceEndModifier(vnParts, modifier, "vnPlacement");
+
+            const krParts = [formatSubjectKr(subject.kr)];
+            if(object && object.kr) krParts.push(`${object.kr}에`);
+            if(modifier.kr && modifier.krPlacement === "beforeVerb") krParts.push(modifier.kr);
+            krParts.push(verb.kr);
+            applySentenceEndModifier(krParts, modifier, "krPlacement");
+
+            return {
+                vnParts,
+                krParts,
+                slots: [subject.vn, verbChunk.join(" "), object ? object.vn : "", modifier.vnPlacement === "sentenceEnd" ? modifier.vn : ""]
+            };
+        }
+        function buildSvSentence(subject, verb, modifier) {
+            const verbChunk = [verb.vn];
+            if(modifier.vn && modifier.vnPlacement === "afterVerb") verbChunk.push(modifier.vn);
+            const vnParts = [subject.vn, verbChunk.join(" ")];
+            applySentenceEndModifier(vnParts, modifier, "vnPlacement");
+
+            const krParts = [formatSubjectKr(subject.kr)];
+            if(modifier.kr && modifier.krPlacement === "beforeVerb") krParts.push(modifier.kr);
+            krParts.push(verb.kr);
+            applySentenceEndModifier(krParts, modifier, "krPlacement");
+
+            return {
+                vnParts,
+                krParts,
+                slots: [subject.vn, verbChunk.join(" "), "", modifier.vnPlacement === "sentenceEnd" ? modifier.vn : ""]
+            };
+        }
+        function buildBeSentence(subject, verb, object, modifier) {
+            const vnParts = [subject.vn, verb.vn, object ? object.vn : ""];
+            applySentenceEndModifier(vnParts, modifier, "vnPlacement");
+
+            const krParts = [formatSubjectKr(subject.kr)];
+            if(object && object.kr) {
+                if(verb.complementType === "person") krParts.push(verb.kr === "이다" ? `${object.kr}${verb.kr}` : object.kr);
+                else krParts.push(`${object.kr}에`);
+            }
+            if(!(object && object.kr && verb.complementType === "person" && verb.kr === "이다")) krParts.push(verb.kr);
+            applySentenceEndModifier(krParts, modifier, "krPlacement");
+
+            return {
+                vnParts,
+                krParts,
+                slots: [subject.vn, verb.vn, object ? object.vn : "", modifier.vnPlacement === "sentenceEnd" ? modifier.vn : ""]
+            };
+        }
+
         // --- Core: Pattern Engine ---
         function generateSentence() {
-            const r = (arr) => arr[Math.floor(Math.random() * arr.length)];
-            if(DB_LOGIC.subjects.length === 0) return null;
+            if(DB_LOGIC.subjects.length === 0 || DB_LOGIC.verbs.length === 0) return null;
 
-            const v = r(DB_LOGIC.verbs);
-            const s = r(DB_LOGIC.subjects); // 주어는 일단 랜덤 (데이터에 타입이 없으므로)
+            const subject = pickRandom(DB_LOGIC.subjects);
+            const verb = pickRandom(DB_LOGIC.verbs);
+            const modifier = chooseModifier(verb);
+            let object = null;
+            let built = null;
 
-            let o = null;
-            let prep = "";
-            let sentenceVN = "", sentenceKR = "";
-            let slots = []; 
-
-            // 2. 패턴별 문장 조립
-            if (v.pattern === "SVO") {
-                let possibleObjs = DB_LOGIC.objects.filter(obj => obj.type === v.reqObj);
-                if(possibleObjs.length === 0) possibleObjs = DB_LOGIC.objects; 
-                o = r(possibleObjs);
-                sentenceVN = `${s.vn} ${v.vn} ${o.vn}`;
-                sentenceKR = `${s.kr}(이/가) ${o.kr}을/를 ${v.kr}`;
-                slots = [s.vn, v.vn, o.vn];
-
-            } else if (v.pattern === "GO") {
-                let possibleObjs = DB_LOGIC.objects.filter(obj => obj.type === "place");
-                o = r(possibleObjs);
-                prep = (v.vn === "đến") ? "từ" : "đến";
-                if(v.vn === "đến" && v.kr === "오다") prep = "từ";
-                else prep = "đến";
-
-                sentenceVN = `${s.vn} ${v.vn} ${prep} ${o.vn}`;
-                sentenceKR = `${s.kr}(이/가) ${o.kr}${prep==='đến'?'에':'에서'} ${v.kr}`;
-                slots = [s.vn, `${v.vn} ${prep}`, o.vn];
-
-            } else if (v.pattern === "SV") {
-                sentenceVN = `${s.vn} ${v.vn}`;
-                sentenceKR = `${s.kr}(이/가) ${v.kr}`;
-                slots = [s.vn, v.vn, ""];
-
-            } else if (v.pattern === "BE") {
-                let targetType = (v.vn === "ở") ? "place" : "person";
-                let possibleObjs = DB_LOGIC.objects.filter(obj => obj.type === targetType);
-                if(possibleObjs.length===0) possibleObjs = DB_LOGIC.objects;
-                o = r(possibleObjs);
-                sentenceVN = `${s.vn} ${v.vn} ${o.vn}`;
-                sentenceKR = `${s.kr}(이/가) ${o.kr}에/입니다`;
-                slots = [s.vn, v.vn, o.vn];
-            } else { // Fallback
-                o = r(DB_LOGIC.objects);
-                sentenceVN = `${s.vn} ${v.vn} ${o.vn}`;
-                sentenceKR = `${s.kr} ${o.kr} ${v.kr}`;
-                slots = [s.vn, v.vn, o.vn];
-            }
-
-            // 3. 수식어 (내장 데이터 사용)
-            // 수식어는 50% 확률로 붙임
-            let m = {vn:"", kr:""};
-            if(Math.random() > 0.5) {
-                const targetModType = (v.pattern === 'GO') ? 'move' : (v.reqObj === 'food' || v.reqObj === 'drink' ? 'consume' : 'all');
-                const possibleMods = MODIFIERS.filter(md => md.target === targetModType || md.target === 'all');
-                if(possibleMods.length > 0) m = r(possibleMods);
-            }
-
-            if(m.vn) {
-                sentenceVN += ` ${m.vn}`;
-                sentenceKR += ` ${m.kr}`;
-                slots.push(m.vn);
+            if(verb.pattern === "SVO") {
+                object = pickObjectByType(verb.reqObj);
+                built = buildSvoSentence(subject, verb, object, modifier);
+            } else if(verb.pattern === "GO") {
+                object = pickObjectByType("place");
+                built = buildGoSentence(subject, verb, object, modifier);
+            } else if(verb.pattern === "SV") {
+                built = buildSvSentence(subject, verb, modifier);
+            } else if(verb.pattern === "BE") {
+                object = pickObjectByType(verb.complementType);
+                built = buildBeSentence(subject, verb, object, modifier);
             } else {
-                slots.push("");
+                object = pickObjectByType(verb.reqObj || "generic");
+                built = buildSvoSentence(subject, verb, object, modifier);
             }
 
-            return { s, v, o, m, prep, vn: sentenceVN, kr: sentenceKR, slots };
+            return {
+                s: subject,
+                v: verb,
+                o: object,
+                m: modifier,
+                prep: verb.destinationMarker || "",
+                vn: joinSentence(built.vnParts),
+                kr: joinSentence(built.krParts),
+                slots: built.slots,
+                patternMeta: PATTERN_META[verb.pattern] || PATTERN_META.SVO
+            };
         }
 
         // --- AI Teacher ---
         function explainByAi(data) {
             if(!data) return "데이터 로딩 중...";
-            
+
+            const patternMeta = data.patternMeta || PATTERN_META[data.v.pattern] || PATTERN_META.SVO;
             let vocList = `<span class="ai-voc-item">${data.s.vn}: ${data.s.kr}</span>`;
             vocList += `<span class="ai-voc-item">${data.v.vn}: ${data.v.kr}</span>`;
             if(data.o && data.o.vn) vocList += `<span class="ai-voc-item">${data.o.vn}: ${data.o.kr}</span>`;
             if(data.prep) vocList += `<span class="ai-voc-item">${data.prep}: (전치사)</span>`;
             if(data.m && data.m.vn) vocList += `<span class="ai-voc-item">${data.m.vn}: ${data.m.kr}</span>`;
 
-            let tip = "";
-            if(data.v.reqObj === 'food' || data.v.reqObj === 'drink') tip = "먹고 마시는 동사에는 맛 표현(ngon)이 어울려요.";
-            else if(data.v.pattern === 'GO') tip = "이동 동사에는 전치사(đến/từ)와 장소가 필수입니다.";
-            else if(data.v.pattern === 'SV') tip = "목적어가 필요 없는 자동사(SV) 문장입니다.";
-            else tip = "주어 + 동사 + 목적어 구조의 가장 기본적인 문장입니다.";
-
             return `
+                <div class="ai-voc-item" style="margin-bottom:8px; font-weight:900;">${patternMeta.label} · ${patternMeta.description}</div>
                 <div class="ai-voc-list">${vocList}</div>
                 <div style="font-weight:bold; color:#d35400;">💡 전체 해석:</div>
                 <div style="font-size:1.1rem; font-weight:bold; color:#333; margin-bottom:5px;">"${data.kr}"</div>
-                <div style="font-size:0.8rem; color:var(--muted-text);">👨‍🏫 Tip: ${tip}</div>
+                <div style="font-size:0.8rem; color:var(--muted-text);">👨‍🏫 규칙: ${patternMeta.tip}</div>
             `;
         }
 
@@ -545,11 +703,11 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
                     document.getElementById('status-log').innerText = "오프라인 모드 (내장 데이터)";
                 }
 
-                // 🔥 [수정] 정확한 9열 매핑 (S:0,1 | V:2,3,4,5 | O:6,7,8)
+                // 패턴 데이터를 정규화해서 중복 없이 누적
                 parseCSV(txtLogic).slice(1).forEach(r => {
-                    if(r[0]) DB_LOGIC.subjects.push({ vn:r[0], kr:r[1], type:"person" }); // 주어 타입 임의지정
-                    if(r[2]) DB_LOGIC.verbs.push({ vn:r[2], kr:r[3], pattern:r[4], reqObj:r[5] });
-                    if(r[6]) DB_LOGIC.objects.push({ vn:r[6], kr:r[7], type:r[8] });
+                    if(r[0]) uniquePush(DB_LOGIC.subjects, createSubjectEntry(r), ["vn", "kr"]);
+                    if(r[2]) uniquePush(DB_LOGIC.verbs, createVerbEntry(r), ["vn", "kr", "pattern", "reqObj"]);
+                    if(r[6]) uniquePush(DB_LOGIC.objects, createObjectEntry(r), ["vn", "kr", "type"]);
                 });
 
                 renderTabs();
