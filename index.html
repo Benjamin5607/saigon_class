@@ -361,13 +361,17 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
         const KR_SUBJECT_FORMS = { "나": "내가", "너": "네가", "저": "제가", "우리": "우리가" };
         const KR_OBJECT_FORMS = { "나": "나를", "너": "너를", "저": "저를", "우리": "우리를" };
         const MODIFIERS = [
-            { vn: "nhiều", kr: "많이", targets: ["consume"], vnPlacement: "afterVerb", krPlacement: "beforeVerb" },
-            { vn: "nhanh", kr: "빨리", targets: ["move"], vnPlacement: "afterVerb", krPlacement: "beforeVerb" },
-            { vn: "chậm", kr: "천천히", targets: ["move"], vnPlacement: "afterVerb", krPlacement: "beforeVerb" },
-            { vn: "sớm", kr: "일찍", targets: ["move"], vnPlacement: "afterVerb", krPlacement: "beforeVerb" },
-            { vn: "nhé", kr: "(부드러운 마무리)", targets: ["all"], vnPlacement: "sentenceEnd", krPlacement: "sentenceEnd" },
-            { vn: "không?", kr: "(의문형)", targets: ["all"], vnPlacement: "sentenceEnd", krPlacement: "sentenceEnd" },
-            { vn: "ạ", kr: "(존댓말)", targets: ["all"], vnPlacement: "sentenceEnd", krPlacement: "sentenceEnd" }
+            { vn: "nhiều", kr: "많이", targets: ["consume"], verbs: ["ăn", "uống"], vnPlacement: "afterVerb", krPlacement: "beforeVerb" },
+            { vn: "nhanh", kr: "빨리", targets: ["move"], verbs: ["đi", "chạy", "lái"], vnPlacement: "afterVerb", krPlacement: "beforeVerb" },
+            { vn: "chậm", kr: "천천히", targets: ["move"], verbs: ["đi", "đến", "lái"], vnPlacement: "afterVerb", krPlacement: "beforeVerb" },
+            { vn: "sớm", kr: "일찍", targets: ["move"], verbs: ["đi", "đến"], vnPlacement: "afterVerb", krPlacement: "beforeVerb" }
+        ];
+        const SENTENCE_MODES = [
+            { id: "plain", label: "평서문", vnTag: "", krTag: "", weight: 4, tip: "기본 문장은 동사 형태를 그대로 두고 자연스러운 어순으로 배치합니다." },
+            { id: "negative", label: "부정형", vnTag: "không", krTag: "(부정형)", weight: 2, tip: "부정은 핵심 동사 앞에 `không`을 두고, `là`는 `không phải là`로 처리합니다." },
+            { id: "question", label: "질문형", vnTag: "có ... không?", krTag: "(질문형)", weight: 2, tip: "예/아니오 질문은 `có`로 동사를 감싸고 문장 끝에 `không?`을 붙입니다." },
+            { id: "polite", label: "존댓말", vnTag: "ạ", krTag: "(존댓말)", weight: 1, tip: "공손한 어조는 문장 끝에 `ạ`를 붙여 표현합니다." },
+            { id: "soft", label: "부드러운 권유형", vnTag: "nhé", krTag: "(부드러운 권유)", weight: 1, tip: "친근하고 부드럽게 제안하거나 마무리할 때 `nhé`를 덧붙입니다." }
         ];
         const PATTERN_META = {
             SVO: {
@@ -401,6 +405,15 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
         const pickRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
         const normalizeText = (value) => String(value || "").trim();
         const normalizeKey = (value) => normalizeText(value).toLowerCase();
+        function pickWeighted(items) {
+            const total = items.reduce((sum, item) => sum + (item.weight || 1), 0);
+            let cursor = Math.random() * total;
+            for(const item of items) {
+                cursor -= (item.weight || 1);
+                if(cursor <= 0) return item;
+            }
+            return items[items.length - 1];
+        }
 
         function readThemeMode() {
             const saved = localStorage.getItem(THEME_STORAGE_KEY);
@@ -461,6 +474,25 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
             if(!txt) return "";
             return KR_OBJECT_FORMS[txt] || `${txt}${objectParticle(txt)}`;
         }
+        function toNegativeVerbKr(verbKr) {
+            const txt = normalizeText(verbKr);
+            if(!txt) return "";
+            if(txt === "이다") return "아니다";
+            if(txt === "있다") return "없다";
+            if(txt.endsWith("하다")) return `${txt.slice(0, -2)}하지 않다`;
+            if(txt.endsWith("다")) return `${txt.slice(0, -1)}지 않다`;
+            return `${txt} 않다`;
+        }
+        function toQuestionCopulaKr(nounKr) {
+            const txt = normalizeText(nounKr);
+            if(!txt) return "맞나요?";
+            return hasFinalConsonant(txt) ? `${txt}인가요?` : `${txt}인가요?`;
+        }
+        function formatIdentityNegativeKr(nounKr) {
+            const txt = normalizeText(nounKr);
+            if(!txt) return "아니다";
+            return `${txt}${hasFinalConsonant(txt) ? "이" : "가"} 아니다`;
+        }
         function uniquePush(list, item, fields) {
             const key = fields.map(field => normalizeKey(item[field])).join("::");
             if(!key.replace(/:/g, "")) return;
@@ -472,6 +504,7 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
             const reqObj = normalizeKey(verb.reqObj);
             if(verb.pattern === "GO") return "move";
             if(verb.pattern === "SVO" && (reqObj === "food" || reqObj === "drink")) return "consume";
+            if(verb.pattern === "SVO" && reqObj === "vehicle") return "move";
             if(verb.pattern === "BE") return "state";
             return "all";
         }
@@ -523,8 +556,15 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
         }
         function chooseModifier(verb) {
             if(Math.random() <= 0.45) return EMPTY_MODIFIER;
-            const candidates = MODIFIERS.filter(mod => mod.targets.includes(verb.family) || mod.targets.includes("all"));
+            const candidates = MODIFIERS.filter((mod) => {
+                const targetMatched = mod.targets.includes(verb.family) || mod.targets.includes("all");
+                const verbMatched = !mod.verbs || mod.verbs.includes(verb.vn);
+                return targetMatched && verbMatched;
+            });
             return candidates.length > 0 ? pickRandom(candidates) : EMPTY_MODIFIER;
+        }
+        function chooseSentenceMode() {
+            return pickWeighted(SENTENCE_MODES);
         }
         function joinSentence(parts) {
             return parts.filter(Boolean).join(" ").replace(/\s+\?/g, "?").trim();
@@ -532,6 +572,9 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
         function applySentenceEndModifier(parts, modifier, placementKey) {
             if(modifier.vn && modifier[placementKey] === "sentenceEnd") parts.push(modifier[placementKey === "vnPlacement" ? "vn" : "kr"]);
             return parts;
+        }
+        function finalizeStructure(vnParts, krParts, slots) {
+            return { vnParts, krParts, slots: [...slots, ""].slice(0, 4) };
         }
         function buildSvoSentence(subject, verb, object, modifier) {
             const verbChunk = [verb.vn];
@@ -545,11 +588,7 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
             krParts.push(verb.kr);
             applySentenceEndModifier(krParts, modifier, "krPlacement");
 
-            return {
-                vnParts,
-                krParts,
-                slots: [subject.vn, verbChunk.join(" "), object ? object.vn : "", modifier.vnPlacement === "sentenceEnd" ? modifier.vn : ""]
-            };
+            return finalizeStructure(vnParts, krParts, [subject.vn, verbChunk.join(" "), object ? object.vn : ""]);
         }
         function buildGoSentence(subject, verb, object, modifier) {
             const verbChunk = [verb.vn];
@@ -564,11 +603,7 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
             krParts.push(verb.kr);
             applySentenceEndModifier(krParts, modifier, "krPlacement");
 
-            return {
-                vnParts,
-                krParts,
-                slots: [subject.vn, verbChunk.join(" "), object ? object.vn : "", modifier.vnPlacement === "sentenceEnd" ? modifier.vn : ""]
-            };
+            return finalizeStructure(vnParts, krParts, [subject.vn, verbChunk.join(" "), object ? object.vn : ""]);
         }
         function buildSvSentence(subject, verb, modifier) {
             const verbChunk = [verb.vn];
@@ -581,11 +616,7 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
             krParts.push(verb.kr);
             applySentenceEndModifier(krParts, modifier, "krPlacement");
 
-            return {
-                vnParts,
-                krParts,
-                slots: [subject.vn, verbChunk.join(" "), "", modifier.vnPlacement === "sentenceEnd" ? modifier.vn : ""]
-            };
+            return finalizeStructure(vnParts, krParts, [subject.vn, verbChunk.join(" "), ""]);
         }
         function buildBeSentence(subject, verb, object, modifier) {
             const vnParts = [subject.vn, verb.vn, object ? object.vn : ""];
@@ -599,11 +630,49 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
             if(!(object && object.kr && verb.complementType === "person" && verb.kr === "이다")) krParts.push(verb.kr);
             applySentenceEndModifier(krParts, modifier, "krPlacement");
 
-            return {
-                vnParts,
-                krParts,
-                slots: [subject.vn, verb.vn, object ? object.vn : "", modifier.vnPlacement === "sentenceEnd" ? modifier.vn : ""]
-            };
+            return finalizeStructure(vnParts, krParts, [subject.vn, verb.vn, object ? object.vn : ""]);
+        }
+        function applySentenceMode(base, subject, verb, object, mode) {
+            const vnParts = [...base.vnParts];
+            const krParts = [...base.krParts];
+            const slots = [...base.slots];
+            const isIdentityCopula = verb.pattern === "BE" && verb.complementType === "person" && normalizeKey(verb.vn) === "là";
+
+            if(mode.id === "negative") {
+                if(isIdentityCopula) {
+                    slots[1] = "không phải là";
+                    vnParts.splice(1, 1, "không phải là");
+                    krParts.splice(1, krParts.length - 1, object && object.kr ? formatIdentityNegativeKr(object.kr) : "아니다");
+                } else {
+                    slots[1] = `không ${slots[1]}`.trim();
+                    vnParts.splice(1, 1, slots[1]);
+                    krParts[krParts.length - 1] = toNegativeVerbKr(krParts[krParts.length - 1]);
+                }
+            } else if(mode.id === "question") {
+                if(isIdentityCopula) {
+                    slots[1] = "có phải là";
+                    slots[3] = "không?";
+                    vnParts.splice(1, 1, "có phải là");
+                    vnParts.push("không?");
+                    krParts.splice(1, krParts.length - 1, object && object.kr ? toQuestionCopulaKr(object.kr) : "맞나요?");
+                } else {
+                    slots[1] = `có ${slots[1]}`.trim();
+                    slots[3] = "không?";
+                    vnParts.splice(1, 1, slots[1]);
+                    vnParts.push("không?");
+                    krParts.push(mode.krTag);
+                }
+            } else if(mode.id === "polite") {
+                slots[3] = "ạ";
+                vnParts.push("ạ");
+                krParts.push(mode.krTag);
+            } else if(mode.id === "soft") {
+                slots[3] = "nhé";
+                vnParts.push("nhé");
+                krParts.push(mode.krTag);
+            }
+
+            return finalizeStructure(vnParts, krParts, slots);
         }
 
         // --- Core: Pattern Engine ---
@@ -613,6 +682,7 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
             const subject = pickRandom(DB_LOGIC.subjects);
             const verb = pickRandom(DB_LOGIC.verbs);
             const modifier = chooseModifier(verb);
+            const sentenceMode = chooseSentenceMode();
             let object = null;
             let built = null;
 
@@ -631,16 +701,18 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
                 object = pickObjectByType(verb.reqObj || "generic");
                 built = buildSvoSentence(subject, verb, object, modifier);
             }
+            const finalized = applySentenceMode(built, subject, verb, object, sentenceMode);
 
             return {
                 s: subject,
                 v: verb,
                 o: object,
                 m: modifier,
+                mode: sentenceMode,
                 prep: verb.destinationMarker || "",
-                vn: joinSentence(built.vnParts),
-                kr: joinSentence(built.krParts),
-                slots: built.slots,
+                vn: joinSentence(finalized.vnParts),
+                kr: joinSentence(finalized.krParts),
+                slots: finalized.slots,
                 patternMeta: PATTERN_META[verb.pattern] || PATTERN_META.SVO
             };
         }
@@ -650,18 +722,22 @@ Bác tài,기사님,lái,운전하다,SVO,vehicle,Taxi,택시,vehicle`;
             if(!data) return "데이터 로딩 중...";
 
             const patternMeta = data.patternMeta || PATTERN_META[data.v.pattern] || PATTERN_META.SVO;
+            const modeMeta = data.mode || SENTENCE_MODES[0];
             let vocList = `<span class="ai-voc-item">${data.s.vn}: ${data.s.kr}</span>`;
             vocList += `<span class="ai-voc-item">${data.v.vn}: ${data.v.kr}</span>`;
             if(data.o && data.o.vn) vocList += `<span class="ai-voc-item">${data.o.vn}: ${data.o.kr}</span>`;
             if(data.prep) vocList += `<span class="ai-voc-item">${data.prep}: (전치사)</span>`;
             if(data.m && data.m.vn) vocList += `<span class="ai-voc-item">${data.m.vn}: ${data.m.kr}</span>`;
+            if(modeMeta.vnTag) vocList += `<span class="ai-voc-item">${modeMeta.vnTag}: ${modeMeta.label}</span>`;
 
             return `
                 <div class="ai-voc-item" style="margin-bottom:8px; font-weight:900;">${patternMeta.label} · ${patternMeta.description}</div>
+                <div class="ai-voc-item" style="margin-bottom:8px; font-weight:900;">문장 모드 · ${modeMeta.label}</div>
                 <div class="ai-voc-list">${vocList}</div>
                 <div style="font-weight:bold; color:#d35400;">💡 전체 해석:</div>
                 <div style="font-size:1.1rem; font-weight:bold; color:#333; margin-bottom:5px;">"${data.kr}"</div>
-                <div style="font-size:0.8rem; color:var(--muted-text);">👨‍🏫 규칙: ${patternMeta.tip}</div>
+                <div style="font-size:0.8rem; color:var(--muted-text);">👨‍🏫 패턴 규칙: ${patternMeta.tip}</div>
+                <div style="font-size:0.8rem; color:var(--muted-text);">🗣️ 문장 모드 규칙: ${modeMeta.tip}</div>
             `;
         }
 
